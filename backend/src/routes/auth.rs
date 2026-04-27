@@ -1,0 +1,198 @@
+use actix_web::{web, HttpResponse, HttpRequest};
+use sea_orm::{DatabaseConnection, EntityTrait, Set, ActiveModelTrait, ColumnTrait, QueryFilter};
+use bcrypt::{hash, verify, DEFAULT_COST};
+use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+use serde::{Deserialize, Serialize};
+use chrono::{Utc, Duration};
+use uuid::Uuid;
+use crate::models::user;
+
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub user: UserInfo,
+}
+
+#[derive(Serialize)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub avatar_url: Option<String>,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub exp: usize,
+}
+
+pub async fn register(
+    db: web::Data<DatabaseConnection>,
+    req: web::Json<RegisterRequest>,
+) -> HttpResponse {
+    let hashed_password = match hash(&req.password, DEFAULT_COST) {
+        Ok(hash) => hash,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to hash password"
+            }))
+        }
+    };
+
+    let user_id = Uuid::new_v4().to_string();
+    let now = Utc::now().naive_utc();
+
+    let new_user = user::ActiveModel {
+        id: Set(user_id.clone()),
+        username: Set(req.username.clone()),
+        email: Set(req.email.clone()),
+        password_hash: Set(hashed_password),
+        status: Set("online".to_string()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        avatar_url: Set(None),
+    };
+
+    match new_user.insert(&**db).await {
+        Ok(_) => {
+            let token = generate_token(&user_id);
+            HttpResponse::Ok().json(AuthResponse {
+                token,
+                user: UserInfo {
+                    id: user_id,
+                    username: req.username.clone(),
+                    email: req.email.clone(),
+                    avatar_url: None,
+                    status: "online".to_string(),
+                },
+            })
+        }
+        Err(e) => {
+            // Check if it's a RecordNotFound error (which might still mean insert succeeded)
+            if format!("{:?}", e).contains("RecordNotFound") {
+                // Try to verify the user was actually inserted
+                match user::Entity::find_by_id(user_id.clone()).one(&**db).await {
+                    Ok(Some(_)) => {
+                        let token = generate_token(&user_id);
+                        HttpResponse::Ok().json(AuthResponse {
+                            token,
+                            user: UserInfo {
+                                id: user_id,
+                                username: req.username.clone(),
+                                email: req.email.clone(),
+                                avatar_url: None,
+                                status: "online".to_string(),
+                            },
+                        })
+                    }
+                    _ => {
+                        log::error!("Failed to insert user: {:?}", e);
+                        HttpResponse::InternalServerError().json(serde_json::json!({
+                            "error": "Failed to create user",
+                            "details": format!("{:?}", e)
+                        }))
+                    }
+                }
+            } else {
+                log::error!("Failed to insert user: {:?}", e);
+                HttpResponse::InternalServerError().json(serde_json::json!({
+                    "error": "Failed to create user",
+                    "details": format!("{:?}", e)
+                }))
+            }
+        }
+    }
+}
+
+pub async fn login(
+    db: web::Data<DatabaseConnection>,
+    req: web::Json<LoginRequest>,
+) -> HttpResponse {
+    let user = match user::Entity::find()
+        .filter(user::Column::Email.eq(&req.email))
+        .one(&**db)
+        .await
+    {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return HttpResponse::Unauthorized().json(serde_json::json!({
+                "error": "Invalid credentials"
+            }))
+        }
+        Err(e) => {
+            log::error!("Failed to find user: {:?}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Database error"
+            }))
+        }
+    };
+
+    let is_valid = match verify(&req.password, &user.password_hash) {
+        Ok(valid) => valid,
+        Err(e) => {
+            log::error!("Password verification error: {:?}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Password verification error"
+            }))
+        }
+    };
+
+    if !is_valid {
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "error": "Invalid credentials"
+        }));
+    }
+
+    let token = generate_token(&user.id);
+
+    HttpResponse::Ok().json(AuthResponse {
+        token,
+        user: UserInfo {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            avatar_url: user.avatar_url,
+            status: user.status,
+        },
+    })
+}
+
+pub async fn logout() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "Logged out successfully"
+    }))
+}
+
+fn generate_token(user_id: &str) -> String {
+    let expiration = Utc::now()
+        .checked_add_signed(Duration::days(7))
+        .expect("valid timestamp")
+        .timestamp();
+
+    let claims = Claims {
+        sub: user_id.to_string(),
+        exp: expiration as usize,
+    };
+
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret("your-secret-key-change-in-production".as_ref()),
+    )
+    .unwrap_or_default()
+}
