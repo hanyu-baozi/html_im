@@ -36,12 +36,17 @@ pub async fn get_messages(
     let limit = query.get("limit")
         .and_then(|l| l.parse::<u64>().ok())
         .unwrap_or(50);
+    let page = query.get("page")
+        .and_then(|p| p.parse::<u64>().ok())
+        .unwrap_or(1);
+    let offset = (page - 1) * limit;
 
     let messages = if let Some(group_id) = query.get("group_id") {
         // Group chat messages
         message::Entity::find()
             .filter(message::Column::ReceiverId.eq(group_id))
-            .order_by_asc(message::Column::Timestamp)
+            .order_by_desc(message::Column::Timestamp)
+            .offset(offset)
             .limit(limit)
             .all(&**db)
             .await
@@ -61,7 +66,8 @@ pub async fn get_messages(
                             .add(message::Column::ReceiverId.eq(&user.user_id))
                     )
             )
-            .order_by_asc(message::Column::Timestamp)
+            .order_by_desc(message::Column::Timestamp)
+            .offset(offset)
             .limit(limit)
             .all(&**db)
             .await
@@ -73,7 +79,7 @@ pub async fn get_messages(
 
     match messages {
         Ok(msgs) => {
-            let responses: Vec<MessageResponse> = msgs
+            let mut responses: Vec<MessageResponse> = msgs
                 .into_iter()
                 .map(|m| MessageResponse {
                     id: m.id,
@@ -85,6 +91,9 @@ pub async fn get_messages(
                     is_read: m.is_read,
                 })
                 .collect();
+            
+            // Reverse to return oldest first within the page
+            responses.reverse();
             
             HttpResponse::Ok().json(responses)
         }
@@ -263,6 +272,57 @@ pub async fn mark_as_read(
         Err(e) => {
             log::error!("Failed to find message: {:?}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database error"}))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DeleteChatRequest {
+    pub contact_id: String,
+}
+
+pub async fn delete_chat_messages(
+    db: web::Data<DatabaseConnection>,
+    user: AuthenticatedUser,
+    req: web::Json<DeleteChatRequest>,
+) -> HttpResponse {
+    let contact_id = req.contact_id.clone();
+
+    if contact_id == user.user_id {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Cannot delete chat with yourself"
+        }));
+    }
+
+    let result = message::Entity::delete_many()
+        .filter(
+            Condition::any()
+                .add(
+                    Condition::all()
+                        .add(message::Column::SenderId.eq(&user.user_id))
+                        .add(message::Column::ReceiverId.eq(&contact_id))
+                )
+                .add(
+                    Condition::all()
+                        .add(message::Column::SenderId.eq(&contact_id))
+                        .add(message::Column::ReceiverId.eq(&user.user_id))
+                )
+        )
+        .exec(&**db)
+        .await;
+
+    match result {
+        Ok(result) => {
+            HttpResponse::Ok().json(serde_json::json!({
+                "message": "Chat messages deleted successfully",
+                "deleted_count": result.rows_affected
+            }))
+        }
+        Err(e) => {
+            log::error!("Failed to delete chat messages: {:?}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to delete chat messages"
+            }))
         }
     }
 }

@@ -8,10 +8,12 @@ use std::future::{ready, Ready};
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
+    pub is_admin: bool,
 }
 
 pub struct AuthenticatedUser {
     pub user_id: String,
+    pub is_admin: bool,
 }
 
 impl FromRequest for AuthenticatedUser {
@@ -47,6 +49,7 @@ impl FromRequest for AuthenticatedUser {
                 Ok(data) => {
                     ready(Ok(AuthenticatedUser {
                         user_id: data.claims.sub,
+                        is_admin: data.claims.is_admin,
                     }))
                 }
                 Err(_) => {

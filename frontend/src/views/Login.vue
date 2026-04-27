@@ -30,6 +30,26 @@
           />
         </div>
         
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">验证码</label>
+          <div class="flex gap-3">
+            <input
+              v-model="captcha"
+              type="text"
+              placeholder="请输入验证码"
+              class="flex-1 px-4 py-3 rounded-xl border-2 border-pink-100 focus:border-pink-300 focus:outline-none transition-colors"
+              maxlength="4"
+            />
+            <img
+              v-if="captchaImage"
+              :src="captchaImage"
+              alt="验证码"
+              class="h-12 rounded-xl cursor-pointer border-2 border-pink-100"
+              @click="fetchCaptcha"
+            />
+          </div>
+        </div>
+        
         <button
           type="submit"
           :disabled="loading"
@@ -56,18 +76,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 
 const router = useRouter()
 const email = ref('')
 const password = ref('')
+const captcha = ref('')
+const captchaId = ref('')
+const captchaImage = ref('')
 const loading = ref(false)
 const error = ref('')
 
+onMounted(() => {
+  fetchCaptcha()
+})
+
+const fetchCaptcha = async () => {
+  try {
+    const response = await api.get('/captcha')
+    captchaId.value = response.data.captcha_id
+    captchaImage.value = response.data.image
+    captcha.value = ''
+  } catch (err) {
+    console.error('Failed to fetch captcha:', err)
+  }
+}
+
 const handleLogin = async () => {
-  if (!email.value || !password.value) {
+  if (!email.value || !password.value || !captcha.value) {
     error.value = '请填写所有字段'
     return
   }
@@ -78,7 +116,9 @@ const handleLogin = async () => {
   try {
     const response = await api.post('/auth/login', {
       email: email.value,
-      password: password.value
+      password: password.value,
+      captcha_id: captchaId.value,
+      captcha: captcha.value
     })
     
     localStorage.setItem('token', response.data.token)
@@ -94,6 +134,9 @@ const handleLogin = async () => {
     router.push('/')
   } catch (err: any) {
     error.value = err.response?.data?.error || '登录失败，请检查邮箱和密码'
+    if (err.response?.status === 400) {
+      fetchCaptcha()
+    }
   } finally {
     loading.value = false
   }

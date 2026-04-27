@@ -1,16 +1,17 @@
-# Dependencies
+# 依赖
 node_modules/
 frontend/node_modules/
-
-# Build outputs
-frontend/dist/
-frontend/.vite/
 backend/target/
 
-# Environment variables
+# 构建输出
+frontend/dist/
+frontend/.vite/
+
+# 环境变量文件（包含敏感信息）
 .env
 .env.local
 .env.*.local
+backend/.env
 
 # IDE
 .vscode/
@@ -19,21 +20,21 @@ backend/target/
 *.swo
 *~
 
-# OS
+# 操作系统
 .DS_Store
 Thumbs.db
 
-# Logs
+# 日志
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Database
+# 数据库
 *.db
 *.sqlite
 *.sqlite3
 
-# Temporary files
+# 临时文件
 *.tmp
 *.temp

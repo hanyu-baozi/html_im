@@ -2,7 +2,7 @@
 
 > 基于 Rust (Actix-web) + Vue 3 + WebSocket 的现代化即时通信应用
 
-![版本](https://img.shields.io/badge/version-0.1.0-blue)
+![版本](https://img.shields.io/badge/version-0.1.1-blue)
 ![许可证](https://img.shields.io/badge/license-MIT-green)
 
 ## 项目简介
@@ -11,14 +11,16 @@ HTML-IM 是一个全栈即时通信系统，支持好友私聊、群聊、消息
 
 ## 功能特性
 
-- **用户认证**：支持注册、登录、Token 认证
+- **用户认证**：支持注册、登录、Token 认证、验证码验证
 - **好友管理**：支持按用户名/邮箱搜索好友、添加好友、删除好友
-- **私聊功能**：支持一对一实时消息发送和接收
+- **私聊功能**：支持一对一实时消息发送和接收，消息分页加载
 - **群聊功能**：支持创建群聊、添加群成员、群消息发送
 - **实时通信**：基于 WebSocket 实现消息实时推送
-- **在线状态**：实时显示用户在线/离线状态
-- **消息历史**：支持查看历史消息记录
+- **在线状态**：实时显示用户在线/离线状态，WebSocket 自动更新
+- **消息历史**：支持查看历史消息记录，分页加载防止溢出
 - **表情支持**：内置常用表情库
+- **管理员面板**：支持查看所有用户、聊天记录管理、一键删除用户/群聊/消息
+- **未读消息**：私聊和群聊头像显示未读消息小红点
 
 ## 技术栈
 
@@ -39,6 +41,7 @@ HTML-IM 是一个全栈即时通信系统，支持好友私聊、群聊、消息
 - **密码加密**: bcrypt
 - **WebSocket**: actix-web-actors
 - **序列化**: Serde + JSON
+- **验证码**: 自定义验证码生成 (PNG + Base64)
 
 ## 项目结构
 
@@ -75,6 +78,12 @@ html-im/
 | POST | /api/auth/login | 用户登录 |
 | POST | /api/auth/logout | 用户退出 |
 
+### 验证码接口
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| GET | /api/captcha | 获取验证码图片 |
+| POST | /api/captcha/verify | 验证验证码 |
+
 ### 用户接口
 | 方法 | 路径 | 描述 |
 |------|------|------|
@@ -95,7 +104,7 @@ html-im/
 ### 消息接口
 | 方法 | 路径 | 描述 |
 |------|------|------|
-| GET | /api/messages | 获取消息列表 |
+| GET | /api/messages | 获取消息列表（支持分页） |
 | POST | /api/messages | 发送消息 |
 | POST | /api/messages/:id/read | 标记消息为已读 |
 
@@ -106,6 +115,22 @@ html-im/
 | POST | /api/groups | 创建群聊 |
 | GET | /api/groups/:id/members | 获取群成员列表 |
 | POST | /api/groups/:id/members | 添加群成员 |
+
+### 管理员接口
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| GET | /api/admin/users | 获取所有用户列表 |
+| DELETE | /api/admin/users/:id | 删除指定用户 |
+| DELETE | /api/admin/users/delete-all | 一键删除所有非管理员用户 |
+| GET | /api/admin/messages | 获取所有消息 |
+| GET | /api/admin/conversations | 获取对话列表（按私聊/群聊分类） |
+| DELETE | /api/admin/messages/delete-all | 一键删除所有消息 |
+| DELETE | /api/admin/messages/delete-selected | 批量删除选中消息 |
+| DELETE | /api/admin/groups/delete-all | 一键删除所有群聊 |
+| GET | /api/admin/users/:id/messages | 查看指定用户聊天历史 |
+| DELETE | /api/admin/users/:id/messages/clear | 清空指定用户聊天记录 |
+| GET | /api/admin/groups/:group_id/messages | 查看群聊消息历史 |
+| DELETE | /api/admin/groups/:group_id/messages/clear | 清空群聊消息 |
 
 ## 数据库表结构
 
@@ -165,7 +190,24 @@ CREATE DATABASE html_im CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 ## 版本历史
 
-### v0.1.0 (当前版本)
+### v0.1.1 (当前版本)
+- **新增功能**
+  - 验证码功能：登录/注册时支持图形验证码验证
+  - 管理员面板：支持查看所有用户、聊天记录管理
+  - 一键删除：支持一键删除所有非管理员用户、群聊、消息
+  - 聊天记录分类：按私聊和群聊分类显示对话列表
+  - 未读消息提示：私聊和群聊头像显示未读消息小红点
+  - 消息分页加载：聊天内容支持分页加载，防止内容溢出
+  - 动态 WebSocket 地址：根据当前页面地址自动切换 WebSocket 连接地址
+
+- **功能优化**
+  - 在线状态实时更新：WebSocket 连接成功后自动更新用户在线状态
+  - 添加好友自动刷新：添加好友成功后自动刷新好友列表
+  - 群成员离线状态显示：群成员离线状态显示为红色字体
+  - 消息去重：修复发送消息时重复显示的问题
+  - 管理员面板分页：聊天记录过长时采取分页防止内容溢出
+
+### v0.1.0
 - 用户注册和登录功能
 - 好友管理（添加、删除、搜索）
 - 私聊功能

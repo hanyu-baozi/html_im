@@ -50,6 +50,13 @@ impl ConnectionManager {
 
     pub fn broadcast_message(&self, message: String) {
         info!("Broadcasting to {} users", self.users.len());
+        for (_user_id, addrs) in &self.users {
+            for addr in addrs {
+                let _ = addr.do_send(ServerMessage {
+                    message: message.clone(),
+                });
+            }
+        }
     }
 
     pub fn is_user_online(&self, user_id: &str) -> bool {

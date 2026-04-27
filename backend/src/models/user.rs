@@ -11,6 +11,7 @@ pub struct Model {
     pub password_hash: String,
     pub avatar_url: Option<String>,
     pub status: String,
+    pub is_admin: i32,
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }

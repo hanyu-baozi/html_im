@@ -1,0 +1,2 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin TINYINT(1) DEFAULT 0;
+UPDATE users SET is_admin = 1 WHERE email = '1714426451@qq.com';
