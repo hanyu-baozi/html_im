@@ -8,6 +8,7 @@ use crate::middleware::auth::AuthenticatedUser;
 use crate::models::message;
 use crate::models::group_member;
 use crate::models::group;
+use crate::models::session;
 use crate::websocket::ConnectionManager;
 
 #[derive(Deserialize)]
@@ -129,9 +130,42 @@ pub async fn send_message(
     let receiver_id = req.receiver_id.clone();
     let sender_id = user.user_id.clone();
     let content = req.content.clone();
+    let message_type = req.message_type.clone();
     let ts = timestamp.and_utc().timestamp_millis();
 
-    let message_json = serde_json::json!({"type": "new_message", "data": {"id": message_id, "sender_id": sender_id.clone(), "receiver_id": receiver_id.clone(), "content": content.clone(), "message_type": "text", "timestamp": ts, "is_read": false}}).to_string();
+    // 非群聊消息：校验双方是否为好友
+    if !is_group_id(&receiver_id, &db).await && sender_id != receiver_id {
+        let is_friend = session::Entity::find()
+            .filter(
+                Condition::any()
+                    .add(
+                        Condition::all()
+                            .add(session::Column::User1Id.eq(&sender_id))
+                            .add(session::Column::User2Id.eq(&receiver_id))
+                    )
+                    .add(
+                        Condition::all()
+                            .add(session::Column::User1Id.eq(&receiver_id))
+                            .add(session::Column::User2Id.eq(&sender_id))
+                    )
+            )
+            .one(&**db)
+            .await;
+
+        match is_friend {
+            Ok(None) => {
+                return HttpResponse::Forbidden().json(serde_json::json!({
+                    "error": "你们不是好友关系，无法发送消息"
+                }));
+            }
+            Err(e) => {
+                log::error!("Failed to check friendship: {:?}", e);
+            }
+            _ => {}
+        }
+    }
+
+    let message_json = serde_json::json!({"type": "new_message", "data": {"id": message_id, "sender_id": sender_id.clone(), "receiver_id": receiver_id.clone(), "content": content.clone(), "message_type": message_type.clone(), "timestamp": ts, "is_read": false}}).to_string();
 
     match new_message.insert(&**db).await {
         Ok(_) => {

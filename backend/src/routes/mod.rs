@@ -8,6 +8,7 @@ pub mod friend;
 pub mod group;
 pub mod captcha;
 pub mod admin;
+pub mod upload;
 
 pub fn configure_routes(cfg: &mut ServiceConfig) {
     cfg
@@ -82,6 +83,11 @@ pub fn admin_routes() -> actix_web::Scope {
         .route("/messages/{id}", web::delete().to(admin::admin_delete_message))
         .route("/groups/{group_id}/messages", web::get().to(admin::admin_get_group_chat_history))
         .route("/groups/{group_id}/messages/clear", web::delete().to(admin::admin_clear_group_messages))
+}
+
+pub fn upload_routes() -> actix_web::Scope {
+    web::scope("/api/upload")
+        .route("/image", web::post().to(upload::upload_image))
 }
 
 pub async fn health() -> HttpResponse {

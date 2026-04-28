@@ -226,7 +226,12 @@
             <div class="max-w-[70%] min-w-0">
               <p v-if="chatType === 'group'" class="text-xs text-gray-500 mb-1">{{ getSenderName(message.sender_id) }}</p>
               <div class="bg-white rounded-2xl rounded-tl-none px-4 py-2 shadow-sm message-bubble">
-                <p class="text-gray-700 break-words overflow-wrap-anywhere">{{ message.content }}</p>
+                <template v-if="message.message_type === 'image'">
+                  <img :src="message.content" alt="图片" class="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity" @click="previewImage(message.content)" loading="lazy" />
+                </template>
+                <template v-else>
+                  <p class="text-gray-700 break-words overflow-wrap-anywhere">{{ message.content }}</p>
+                </template>
               </div>
               <span class="text-xs text-gray-400 mt-1 block">{{ formatTime(message.timestamp) }}</span>
             </div>
@@ -234,7 +239,12 @@
           <template v-else>
             <div class="max-w-[70%] min-w-0">
               <div class="bg-gradient-to-br from-pink-500 to-pink-600 rounded-2xl rounded-tr-none px-4 py-2 shadow-sm message-bubble">
-                <p class="text-white break-words overflow-wrap-anywhere">{{ message.content }}</p>
+                <template v-if="message.message_type === 'image'">
+                  <img :src="message.content" alt="图片" class="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity" @click="previewImage(message.content)" loading="lazy" />
+                </template>
+                <template v-else>
+                  <p class="text-white break-words overflow-wrap-anywhere">{{ message.content }}</p>
+                </template>
               </div>
               <span class="text-xs text-gray-400 mt-1 block text-right">{{ formatTime(message.timestamp) }}</span>
             </div>
@@ -264,9 +274,20 @@
           >
             😊
           </button>
-          <button class="w-10 h-10 rounded-full bg-pink-100 text-pink-500 flex items-center justify-center hover:bg-pink-200 transition-colors flex-shrink-0">
-            📎
+          <button 
+            @click="triggerImageUpload"
+            class="w-10 h-10 rounded-full bg-pink-100 text-pink-500 flex items-center justify-center hover:bg-pink-200 transition-colors flex-shrink-0"
+            title="发送图片"
+          >
+            🖼️
           </button>
+          <input 
+            ref="imageInputRef"
+            type="file" 
+            accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+            @change="handleImageUpload"
+            class="hidden"
+          />
           <textarea 
             ref="messageInputRef"
             v-model="newMessage"
@@ -761,6 +782,21 @@
         </div>
       </div>
     </div>
+
+    <!-- 图片预览 -->
+    <div v-if="showImagePreview" class="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]">
+      <div class="relative max-w-[90vw] max-h-[90vh]">
+        <button 
+          @click="showImagePreview = false"
+          class="absolute -top-4 -right-4 w-10 h-10 rounded-full bg-white shadow-lg flex items-center justify-center text-gray-700 hover:text-red-500 transition-colors z-10"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <img :src="previewImageUrl" alt="预览" class="max-w-full max-h-[90vh] rounded-2xl shadow-2xl" />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -778,6 +814,7 @@ interface Message {
   sender_id: string
   receiver_id: string
   content: string
+  message_type: string
   timestamp: number
   is_read: boolean
 }
@@ -862,6 +899,10 @@ const searchType = ref<'username' | 'email'>('username')
 const isSearching = ref(false)
 const showEmojiPicker = ref(false)
 const messageInputRef = ref<HTMLTextAreaElement | null>(null)
+const imageInputRef = ref<HTMLInputElement | null>(null)
+const previewImageUrl = ref('')
+const showImagePreview = ref(false)
+const uploadingImage = ref(false)
 
 // 自动调整 textarea 高度
 const autoResizeTextarea = () => {
@@ -1047,9 +1088,14 @@ const searchUsers = async () => {
 const addFriend = async (friendId: string) => {
   try {
     await api.post('/friends/add', { friend_id: friendId })
-    searchResults.value = searchResults.value.filter(u => u.id !== friendId)
+    searchResults.value = []
     searchQuery.value = ''
+    activeTab.value = 'friends'
     await loadFriends()
+    const newFriend = users.value.find(u => u.id === friendId)
+    if (newFriend) {
+      selectUser(newFriend)
+    }
   } catch (error: any) {
     const msg = error.response?.data?.error || '添加好友失败'
     alert(msg)
@@ -1062,6 +1108,7 @@ const addFriendByEmail = async () => {
     await api.post('/friends/add-by-email', { email: searchQuery.value })
     searchQuery.value = ''
     searchResults.value = []
+    activeTab.value = 'friends'
     await loadFriends()
   } catch (error: any) {
     const msg = error.response?.data?.error || '添加好友失败'
@@ -1143,23 +1190,40 @@ const logout = async () => {
   router.push('/login')
 }
 
-const handleBeforeUnload = async (event: BeforeUnloadEvent) => {
+const handleBeforeUnload = () => {
+  updateOfflineStatus()
+}
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    offlineSent = false
+    userStatus.value = 'online'
+    loadFriends()
+    loadGroups()
+  }
+}
+
+let offlineSent = false
+const updateOfflineStatus = () => {
+  if (offlineSent) return
+  offlineSent = true
+
+  const token = localStorage.getItem('token')
+  if (!token) return
+
   try {
-    const token = localStorage.getItem('token')
-    if (token) {
-      await fetch('/api/users/status', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ status: 'offline' })
-      })
-    }
+    fetch('/api/users/status', {
+      method: 'PUT',
+      keepalive: true,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ status: 'offline' })
+    })
   } catch (error) {
     console.error('Failed to update status on close:', error)
   }
-  return undefined
 }
 
 const loadAllUsers = async () => {
@@ -1441,6 +1505,82 @@ const addEmoji = (emoji: string) => {
   showEmojiPicker.value = false
 }
 
+const triggerImageUpload = () => {
+  imageInputRef.value?.click()
+}
+
+const handleImageUpload = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  if (!input.files || !input.files[0]) return
+
+  const file = input.files[0]
+  const maxSize = 10 * 1024 * 1024
+  if (file.size > maxSize) {
+    alert('图片大小超过限制（最大10MB）')
+    input.value = ''
+    return
+  }
+
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp']
+  if (!allowedTypes.includes(file.type)) {
+    alert('不支持的文件格式，仅支持 PNG、JPG、GIF、WebP')
+    input.value = ''
+    return
+  }
+
+  uploadingImage.value = true
+  try {
+    const formData = new FormData()
+    formData.append('image', file)
+
+    const token = localStorage.getItem('token')
+    const response = await fetch('/api/upload/image', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    })
+
+    const data = await response.json()
+    if (data.urls && data.urls.length > 0) {
+      await sendImageMessage(data.urls[0])
+    }
+  } catch (error) {
+    console.error('Failed to upload image:', error)
+    alert('图片上传失败，请重试')
+  } finally {
+    uploadingImage.value = false
+    input.value = ''
+  }
+}
+
+const sendImageMessage = async (imageUrl: string) => {
+  let receiverId = ''
+  if (chatType.value === 'private' && selectedContact.value) {
+    receiverId = selectedContact.value.id
+  } else if (chatType.value === 'group' && selectedGroup.value) {
+    receiverId = selectedGroup.value.id
+  }
+
+  if (!receiverId) return
+
+  try {
+    await api.post('/messages', {
+      receiver_id: receiverId,
+      content: imageUrl,
+      message_type: 'image'
+    })
+  } catch (error) {
+    console.error('Failed to send image message:', error)
+  }
+}
+
+const previewImage = (url: string) => {
+  previewImageUrl.value = url
+  showImagePreview.value = true
+}
+
 watch(adminTab, (newTab) => {
   if (newTab === 'messages') {
     loadAllUsers()
@@ -1522,9 +1662,9 @@ const connectWebSocket = () => {
       users.value = users.value.map(u => 
         u.id === data.user_id ? { ...u, status: data.status } : u
       )
-      // 更新好友列表
-      friends.value = friends.value.map(f =>
-        f.id === data.user_id ? { ...f, status: data.status } : f
+      // 更新好友列表（users 就是好友列表）
+      users.value = users.value.map(u =>
+        u.id === data.user_id ? { ...u, status: data.status } : u
       )
       // 更新群成员列表
       groupMembers.value = groupMembers.value.map(m =>
@@ -1545,6 +1685,14 @@ const connectWebSocket = () => {
         }
         return conv
       })
+    } else if (data.type === 'friend_added') {
+      loadFriends()
+    } else if (data.type === 'friend_removed') {
+      if (selectedContact.value && selectedContact.value.id === data.friend_id) {
+        selectedContact.value = null
+        messages.value = []
+      }
+      loadFriends()
     } else if (data.type === 'new_message') {
       const newMsg = data.data
       const exists = messages.value.some(m => m.id === newMsg.id)
@@ -1600,6 +1748,7 @@ onMounted(() => {
   }
   
   window.addEventListener('beforeunload', handleBeforeUnload)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   
   loadFriends()
   loadGroups()
@@ -1608,6 +1757,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   if (ws) {
     ws.close()
   }

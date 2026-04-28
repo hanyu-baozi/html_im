@@ -1,5 +1,6 @@
 use actix_web::{web, App, HttpServer, middleware as actix_middleware, http::header};
 use actix_cors::Cors;
+use actix_files as fs;
 use dotenv::dotenv;
 use log::info;
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,14 @@ async fn main() -> std::io::Result<()> {
     let server_port = config.server_port;
     
     info!("Server will bind to {}:{}", server_host, server_port);
-    
+
+    // Create uploads directory if it doesn't exist
+    let uploads_dir = std::path::Path::new("uploads");
+    if !uploads_dir.exists() {
+        std::fs::create_dir_all(uploads_dir).expect("Failed to create uploads directory");
+        info!("Created uploads directory");
+    }
+
     HttpServer::new(move || {
         // 配置 CORS，限制访问来源
         let allowed_origin = std::env::var("ALLOWED_ORIGIN")
@@ -61,6 +69,8 @@ async fn main() -> std::io::Result<()> {
             .service(routes::friend_routes())
             .service(routes::group_routes())
             .service(routes::admin_routes())
+            .service(routes::upload_routes())
+            .service(fs::Files::new("/uploads", "uploads").show_files_listing())
             .route("/ws", web::get().to(websocket::websocket_route))
     })
     .bind((server_host, server_port))?

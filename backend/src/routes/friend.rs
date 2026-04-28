@@ -1,8 +1,11 @@
 use actix_web::{web, HttpResponse};
-use sea_orm::{DatabaseConnection, EntityTrait, Set, ActiveModelTrait, ColumnTrait, QueryFilter, QuerySelect, ModelTrait};
+use sea_orm::{DatabaseConnection, EntityTrait, Set, ActiveModelTrait, ColumnTrait, QueryFilter, QuerySelect, ModelTrait, Condition};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use std::sync::{Arc, Mutex};
 use crate::models::session;
+use crate::models::message;
+use crate::websocket::ConnectionManager;
 use crate::middleware::auth::AuthenticatedUser;
 
 #[derive(Deserialize)]
@@ -33,6 +36,7 @@ pub async fn add_friend(
     db: web::Data<DatabaseConnection>,
     user: AuthenticatedUser,
     req: web::Json<AddFriendRequest>,
+    manager: web::Data<Arc<Mutex<ConnectionManager>>>,
 ) -> HttpResponse {
     let friend_id = req.friend_id.clone();
     
@@ -76,15 +80,25 @@ pub async fn add_friend(
     let new_session = session::ActiveModel {
         id: Set(session_id),
         user1_id: Set(user.user_id.clone()),
-        user2_id: Set(friend_id),
+        user2_id: Set(friend_id.clone()),
         last_message_at: Set(now),
         created_at: Set(now),
     };
-    
+
     match new_session.insert(&**db).await {
-        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
-            "message": "Friend added successfully"
-        })),
+        Ok(_) => {
+            let notify_json = serde_json::json!({
+                "type": "friend_added",
+                "friend_id": user.user_id.clone(),
+            }).to_string();
+
+            let mut mgr = manager.lock().unwrap();
+            mgr.send_to_user(&friend_id, notify_json);
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "message": "Friend added successfully"
+            }))
+        }
         Err(e) => {
             log::error!("Failed to add friend: {:?}", e);
             HttpResponse::InternalServerError().json(serde_json::json!({
@@ -98,6 +112,7 @@ pub async fn add_friend_by_email(
     db: web::Data<DatabaseConnection>,
     user: AuthenticatedUser,
     req: web::Json<AddFriendByEmailRequest>,
+    manager: web::Data<Arc<Mutex<ConnectionManager>>>,
 ) -> HttpResponse {
     use crate::models::user;
 
@@ -148,17 +163,27 @@ pub async fn add_friend_by_email(
             let new_session = session::ActiveModel {
                 id: Set(session_id),
                 user1_id: Set(user.user_id.clone()),
-                user2_id: Set(friend_id),
+                user2_id: Set(friend_id.clone()),
                 last_message_at: Set(now),
                 created_at: Set(now),
             };
 
             match new_session.insert(&**db).await {
-                Ok(_) => HttpResponse::Ok().json(serde_json::json!({
-                    "message": "Friend added successfully"
-                })),
+                Ok(_) => {
+                    let notify_json = serde_json::json!({
+                        "type": "friend_added",
+                        "friend_id": user.user_id.clone(),
+                    }).to_string();
+
+                    let mut mgr = manager.lock().unwrap();
+                    mgr.send_to_user(&friend_id, notify_json);
+
+                    HttpResponse::Ok().json(serde_json::json!({
+                        "message": "Friend added successfully"
+                    }))
+                }
                 Err(e) => {
-                    log::error!("Failed to add friend: {:?}", e);
+                    log::error!("Failed to add friend by email: {:?}", e);
                     HttpResponse::InternalServerError().json(serde_json::json!({
                         "error": "Failed to add friend"
                     }))
@@ -234,6 +259,7 @@ pub async fn remove_friend(
     db: web::Data<DatabaseConnection>,
     user: AuthenticatedUser,
     req: web::Json<RemoveFriendRequest>,
+    manager: web::Data<Arc<Mutex<ConnectionManager>>>,
 ) -> HttpResponse {
     let friend_id = req.friend_id.clone();
     
@@ -259,10 +285,46 @@ pub async fn remove_friend(
     
     match session {
         Ok(Some(session)) => {
+            // 删除双方之间的聊天消息
+            match message::Entity::delete_many()
+                .filter(
+                    Condition::any()
+                        .add(
+                            Condition::all()
+                                .add(message::Column::SenderId.eq(&user.user_id))
+                                .add(message::Column::ReceiverId.eq(&friend_id))
+                        )
+                        .add(
+                            Condition::all()
+                                .add(message::Column::SenderId.eq(&friend_id))
+                                .add(message::Column::ReceiverId.eq(&user.user_id))
+                        )
+                )
+                .exec(&**db)
+                .await
+            {
+                Ok(r) => {
+                    log::info!("Deleted {} messages between users", r.rows_affected);
+                }
+                Err(e) => {
+                    log::error!("Failed to delete messages: {:?}", e);
+                }
+            }
+
             match session.delete(&**db).await {
-                Ok(_) => HttpResponse::Ok().json(serde_json::json!({
-                    "message": "Friend removed successfully"
-                })),
+                Ok(_) => {
+                    let notify_json = serde_json::json!({
+                        "type": "friend_removed",
+                        "friend_id": user.user_id.clone(),
+                    }).to_string();
+
+                    let mut mgr = manager.lock().unwrap();
+                    mgr.send_to_user(&friend_id, notify_json);
+
+                    HttpResponse::Ok().json(serde_json::json!({
+                        "message": "Friend removed successfully"
+                    }))
+                }
                 Err(e) => {
                     log::error!("Failed to remove friend: {:?}", e);
                     HttpResponse::InternalServerError().json(serde_json::json!({
